@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Role = "user" | "agent";
 interface Msg {
@@ -155,7 +157,15 @@ function Chat({ token, onLogout }: { token: string; onLogout: () => void }) {
         {msgs.map((m, i) => (
           <div key={i} style={m.role === "user" ? styles.userRow : styles.agentRow}>
             <div style={m.role === "user" ? styles.userBubble : styles.agentBubble}>
-              {m.text || (m.pending ? "…" : "")}
+              {m.role === "user" ? (
+                m.text
+              ) : m.text ? (
+                <Markdown text={m.text} />
+              ) : m.pending ? (
+                "…"
+              ) : (
+                ""
+              )}
             </div>
           </div>
         ))}
@@ -182,6 +192,50 @@ function Chat({ token, onLogout }: { token: string; onLogout: () => void }) {
         </button>
       </div>
     </main>
+  );
+}
+
+/** エージェントの返答を Markdown としてレンダリングする。 */
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: (props) => (
+            <div style={styles.tableWrap}>
+              <table style={styles.table} {...props} />
+            </div>
+          ),
+          thead: (props) => <thead style={styles.thead} {...props} />,
+          th: (props) => <th style={styles.th} {...props} />,
+          td: (props) => <td style={styles.td} {...props} />,
+          a: (props) => <a style={styles.link} target="_blank" rel="noreferrer" {...props} />,
+          code: ({ className, children, ...props }) => {
+            const isBlock = /\n/.test(String(children ?? "")) || (className ?? "").includes("language-");
+            return isBlock ? (
+              <code style={styles.codeBlock} {...props}>
+                {children}
+              </code>
+            ) : (
+              <code style={styles.codeInline} {...props}>
+                {children}
+              </code>
+            );
+          },
+          pre: (props) => <pre style={styles.pre} {...props} />,
+          blockquote: (props) => <blockquote style={styles.blockquote} {...props} />,
+          ul: (props) => <ul style={styles.list} {...props} />,
+          ol: (props) => <ol style={styles.list} {...props} />,
+          h1: (props) => <h1 style={styles.h1} {...props} />,
+          h2: (props) => <h2 style={styles.h2} {...props} />,
+          h3: (props) => <h3 style={styles.h3} {...props} />,
+          hr: (props) => <hr style={styles.hr} {...props} />,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -321,10 +375,61 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--border)",
     padding: "10px 14px",
     borderRadius: "16px 16px 16px 4px",
-    whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
   statusLine: { color: "var(--muted)", fontSize: 13, fontStyle: "italic" },
+  tableWrap: { overflowX: "auto", margin: "8px 0" },
+  table: {
+    borderCollapse: "collapse",
+    width: "100%",
+    fontSize: 14,
+  },
+  thead: { background: "var(--panel-2)" },
+  th: {
+    border: "1px solid var(--border)",
+    padding: "6px 10px",
+    textAlign: "left",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  td: {
+    border: "1px solid var(--border)",
+    padding: "6px 10px",
+    textAlign: "left",
+  },
+  link: { color: "var(--accent)", textDecoration: "underline" },
+  codeInline: {
+    background: "var(--panel-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    padding: "1px 5px",
+    fontSize: "0.88em",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  },
+  codeBlock: {
+    display: "block",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 13,
+  },
+  pre: {
+    background: "var(--panel-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: "10px 12px",
+    overflowX: "auto",
+    margin: "8px 0",
+  },
+  blockquote: {
+    borderLeft: "3px solid var(--border)",
+    margin: "8px 0",
+    padding: "2px 0 2px 12px",
+    color: "var(--muted)",
+  },
+  list: { margin: "6px 0", paddingLeft: 22 },
+  h1: { fontSize: 20, fontWeight: 700, margin: "12px 0 6px" },
+  h2: { fontSize: 18, fontWeight: 700, margin: "12px 0 6px" },
+  h3: { fontSize: 16, fontWeight: 700, margin: "10px 0 6px" },
+  hr: { border: "none", borderTop: "1px solid var(--border)", margin: "12px 0" },
   composer: {
     display: "flex",
     gap: 8,

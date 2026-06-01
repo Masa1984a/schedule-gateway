@@ -40,3 +40,23 @@ textarea {
   font: inherit;
   color: inherit;
 }
+
+/* エージェント返答（Markdown）のブロック余白を調整 */
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md p {
+  margin: 6px 0;
+}
+.md p:first-child {
+  margin-top: 0;
+}
+.md p:last-child {
+  margin-bottom: 0;
+}
+.md li {
+  margin: 2px 0;
+}
