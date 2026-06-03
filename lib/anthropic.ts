@@ -24,10 +24,16 @@ export function getClient(): Anthropic {
   return _client;
 }
 
-function getAgentConfig() {
+/** 現在の AGENT_ID を返す（未設定なら例外）。セッション台帳の世代管理にも使う。 */
+export function getAgentId(): string {
   const agentId = process.env.AGENT_ID;
-  const environmentId = process.env.ENVIRONMENT_ID;
   if (!agentId) throw new Error("AGENT_ID is not set");
+  return agentId;
+}
+
+function getAgentConfig() {
+  const agentId = getAgentId();
+  const environmentId = process.env.ENVIRONMENT_ID;
   if (!environmentId) throw new Error("ENVIRONMENT_ID is not set");
   return { agentId, environmentId };
 }

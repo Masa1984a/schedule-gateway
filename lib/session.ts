@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { createSession, bootstrapSession, getSessionStatus } from "./anthropic";
+import { createSession, bootstrapSession, getSessionStatus, getAgentId } from "./anthropic";
 
 /**
  * VAULT_ID が設定されていれば MCP 方式（bootstrap 不要）。
@@ -35,28 +35,34 @@ async function ensureTable(): Promise<void> {
     CREATE TABLE IF NOT EXISTS gateway_sessions (
       user_key     text PRIMARY KEY,
       session_id   text NOT NULL,
+      agent_id     text,
       created_at   timestamptz NOT NULL DEFAULT now(),
       last_used_at timestamptz NOT NULL DEFAULT now()
     )
   `;
+  // 既存テーブル（agent_id 列が無い旧スキーマ）へのマイグレーション。
+  await sql`ALTER TABLE gateway_sessions ADD COLUMN IF NOT EXISTS agent_id text`;
   tableEnsured = true;
 }
 
-async function lookup(userKey: string): Promise<string | null> {
+async function lookup(userKey: string): Promise<{ sessionId: string; agentId: string | null } | null> {
   const sql = db();
   const rows = (await sql`
-    SELECT session_id FROM gateway_sessions WHERE user_key = ${userKey}
-  `) as Array<{ session_id: string }>;
-  return rows[0]?.session_id ?? null;
+    SELECT session_id, agent_id FROM gateway_sessions WHERE user_key = ${userKey}
+  `) as Array<{ session_id: string; agent_id: string | null }>;
+  const row = rows[0];
+  return row ? { sessionId: row.session_id, agentId: row.agent_id } : null;
 }
 
-async function store(userKey: string, sessionId: string): Promise<void> {
+async function store(userKey: string, sessionId: string, agentId: string): Promise<void> {
   const sql = db();
   await sql`
-    INSERT INTO gateway_sessions (user_key, session_id, last_used_at)
-    VALUES (${userKey}, ${sessionId}, now())
+    INSERT INTO gateway_sessions (user_key, session_id, agent_id, last_used_at)
+    VALUES (${userKey}, ${sessionId}, ${agentId}, now())
     ON CONFLICT (user_key)
-    DO UPDATE SET session_id = EXCLUDED.session_id, last_used_at = now()
+    DO UPDATE SET session_id = EXCLUDED.session_id,
+                  agent_id   = EXCLUDED.agent_id,
+                  last_used_at = now()
   `;
 }
 
@@ -75,27 +81,31 @@ async function createAndBootstrap(userKey: string): Promise<string> {
   if (!isMcpEnabled()) {
     await bootstrapSession(sessionId);
   }
-  await store(userKey, sessionId);
+  await store(userKey, sessionId, getAgentId());
   return sessionId;
 }
 
 /**
- * userKey のセッションを取得する。無い／終了済みなら新規作成＋bootstrap。
+ * userKey のセッションを取得する。無い／終了済み／Agent世代不一致なら新規作成＋bootstrap。
+ *
+ * 台帳に保存した agent_id が現在の AGENT_ID と異なる場合は再利用しない。
+ * これにより AGENT_ID を差し替えた直後は自動的に新しいセッションへ切り替わる
+ * （旧スキーマ由来の agent_id=null も不一致扱いとなり、初回アクセスで作り直される）。
  */
 export async function getOrCreateSession(userKey: string): Promise<string> {
   await ensureTable();
 
   const existing = await lookup(userKey);
-  if (existing) {
+  if (existing && existing.agentId === getAgentId()) {
     let status: string | null = null;
     try {
-      status = await getSessionStatus(existing);
+      status = await getSessionStatus(existing.sessionId);
     } catch {
       status = null; // 見つからない／取得失敗 → 作り直す
     }
     if (status && REUSABLE.has(status)) {
       await touch(userKey);
-      return existing;
+      return existing.sessionId;
     }
   }
 
