@@ -71,6 +71,20 @@ async function touch(userKey: string): Promise<void> {
   await sql`UPDATE gateway_sessions SET last_used_at = now() WHERE user_key = ${userKey}`;
 }
 
+/**
+ * userKey の台帳行を削除し、次回アクセスで新規セッションを作り直させる。
+ * 削除した session_id を返す（行が無ければ null）。UI のリセットボタンや
+ * scripts/reset-session.mjs から使う。
+ */
+export async function resetSession(userKey: string): Promise<string | null> {
+  await ensureTable();
+  const sql = db();
+  const rows = (await sql`
+    DELETE FROM gateway_sessions WHERE user_key = ${userKey} RETURNING session_id
+  `) as Array<{ session_id: string }>;
+  return rows[0]?.session_id ?? null;
+}
+
 // このステータスなら使い回せる。それ以外（terminated 等）は作り直す。
 const REUSABLE = new Set(["running", "idle"]);
 

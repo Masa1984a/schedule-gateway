@@ -137,13 +137,44 @@ function Chat({ token, onLogout }: { token: string; onLogout: () => void }) {
     );
   }
 
+  /** 台帳をリセットし、次回送信で新しいセッションを開始する。 */
+  async function resetSession() {
+    if (busy) return;
+    if (!confirm("会話をクリアして新しいセッションを開始しますか？")) return;
+    setBusy(true);
+    setStatus("セッションをリセット中…");
+    try {
+      const res = await fetch("/api/session/reset", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        setStatus(`リセット失敗: ${res.status} ${t}`);
+        return;
+      }
+      setMsgs([]);
+      setStatus("新しいセッションを開始しました");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (err) {
+      setStatus(`リセット失敗: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main style={styles.chatWrap}>
       <header style={styles.header}>
         <span style={styles.headerTitle}>Schedule</span>
-        <button style={styles.linkBtn} onClick={onLogout}>
-          ログアウト
-        </button>
+        <div style={styles.headerActions}>
+          <button style={styles.linkBtn} onClick={resetSession} disabled={busy} title="会話をクリアして新しいセッションを開始">
+            リセット
+          </button>
+          <button style={styles.linkBtn} onClick={onLogout}>
+            ログアウト
+          </button>
+        </div>
       </header>
 
       <div ref={scrollRef} style={styles.messages}>
@@ -342,6 +373,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--bg)",
   },
   headerTitle: { fontWeight: 700, fontSize: 17 },
+  headerActions: { display: "flex", alignItems: "center", gap: 12 },
   linkBtn: {
     background: "none",
     border: "none",
