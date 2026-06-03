@@ -4,6 +4,11 @@ import Anthropic from "@anthropic-ai/sdk";
  * Managed Agents クライアントの薄いラッパ。
  * - Agent / Environment は既存のものを「呼ぶだけ」（作り直さない）。
  * - beta ヘッダ `managed-agents-2026-04-01` は SDK が自動付与する。
+ *
+ * MCP 対応:
+ *   MCP_SERVER_URL が設定されている場合、セッション作成時に mcp_servers を渡す。
+ *   GATEWAY_TOKEN を MCPサーバの認証トークンとして兼用する。
+ *   MCP_SERVER_URL が未設定の場合は旧 bootstrap 方式にフォールバックする（ロールバック用）。
  */
 
 let _client: Anthropic | null = null;
@@ -29,11 +34,29 @@ function getAgentConfig() {
 export async function createSession(): Promise<string> {
   const client = getClient();
   const { agentId, environmentId } = getAgentConfig();
-  const session = await client.beta.sessions.create({
-    agent: agentId, // 文字列指定 = 最新バージョンを使用
+
+  const params: Record<string, unknown> = {
+    agent: agentId,
     environment_id: environmentId,
     title: "schedule-gateway session",
-  });
+  };
+
+  // MCP_SERVER_URL が設定されていれば予定DBのMCPサーバを接続する
+  const mcpUrl = process.env.MCP_SERVER_URL;
+  const mcpToken = process.env.GATEWAY_TOKEN;
+  if (mcpUrl && mcpToken) {
+    params.mcp_servers = [
+      {
+        type: "url",
+        url: mcpUrl,
+        name: "schedule-db",
+        authorization_token: mcpToken,
+      },
+    ];
+  }
+
+  // SDK の型定義が mcp_servers に追いついていないため as any でキャスト
+  const session = await (client.beta.sessions.create as (p: unknown) => Promise<{ id: string }>)(params);
   return session.id;
 }
 
@@ -61,10 +84,8 @@ export async function streamSession(sessionId: string): Promise<AsyncIterable<an
 }
 
 /**
- * bootstrap 文面を組み立てる。
- * - `$HOME` はサンドボックス(Linux)の bash 側で展開させる。
- * - 接続文字列は `&` を含むため、値を必ずシングルクオートで括る
- *   （括らないと source 時に bash が `&` をバックグラウンド演算子と解釈し URL が切れる）。
+ * bootstrap 文面を組み立てる（旧 bootstrap 方式のフォールバック用）。
+ * MCP_SERVER_URL が設定されている場合はこの関数を呼ばないこと。
  */
 export function buildBootstrapText(databaseUrl: string): string {
   return [
@@ -75,9 +96,8 @@ export function buildBootstrapText(databaseUrl: string): string {
 }
 
 /**
- * 新規セッションに DATABASE_URL を注入する。
- * bootstrap の user.message を送り、その応答（agent の bash 実行ターン）を
- * idle まで読み捨てる。これにより以降のユーザー発話のストリームがクリーンになる。
+ * 旧 bootstrap 方式: 新規セッションに DATABASE_URL を注入する。
+ * MCP_SERVER_URL が設定されていない場合のフォールバック（ロールバック時のみ使用）。
  */
 export async function bootstrapSession(sessionId: string): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;

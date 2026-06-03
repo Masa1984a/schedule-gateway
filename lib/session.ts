@@ -2,6 +2,14 @@ import { neon } from "@neondatabase/serverless";
 import { createSession, bootstrapSession, getSessionStatus } from "./anthropic";
 
 /**
+ * MCP_SERVER_URL が設定されていれば MCP 方式（bootstrap 不要）。
+ * 未設定の場合は旧 bootstrap 方式にフォールバックする（ロールバック時に利用）。
+ */
+function isMcpEnabled(): boolean {
+  return !!process.env.MCP_SERVER_URL;
+}
+
+/**
  * user_key ↔ session_id を Neon に保存・再利用する。
  * 個人運用は user_key='me' 固定。terminated になっていたら作り直す。
  *
@@ -61,7 +69,11 @@ const REUSABLE = new Set(["running", "idle"]);
 
 async function createAndBootstrap(userKey: string): Promise<string> {
   const sessionId = await createSession();
-  await bootstrapSession(sessionId);
+  // MCP 方式: bootstrap 不要（DATABASE_URL はサーバ側 env に留まる）
+  // 旧 bootstrap 方式: MCP_SERVER_URL 未設定時のフォールバック
+  if (!isMcpEnabled()) {
+    await bootstrapSession(sessionId);
+  }
   await store(userKey, sessionId);
   return sessionId;
 }
