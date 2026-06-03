@@ -104,8 +104,16 @@ foreach ($skill in $titles.Keys) {
   $obj = $raw | ConvertFrom-Json
   if (-not $obj.id) { throw "アップロード応答に id がありません ($skill): $raw" }
 
-  $result[$skill] = $obj.id
-  Write-Host "  -> id=$($obj.id) version=$($obj.latest_version ?? $obj.version)"
+  # skill-ids.json には常に親スキルID（skill_xxx）を保存する。
+  # -NewVersion 時のレスポンス id は skill_version_xxx（バージョンID）なので、
+  # それは保存せず、既存の親 skill_id を維持する（setup-agent.ps1 が version='latest' で参照する）。
+  if ($NewVersion) {
+    $result[$skill] = $existing[$skill]
+    Write-Host "  -> skill_id=$($existing[$skill]) new version=$($obj.id)"
+  } else {
+    $result[$skill] = $obj.id
+    Write-Host "  -> skill_id=$($obj.id) version=$($obj.latest_version ?? $obj.version)"
+  }
 }
 
 $result | ConvertTo-Json | Set-Content -LiteralPath $idsPath -Encoding utf8

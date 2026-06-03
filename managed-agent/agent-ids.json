@@ -1,7 +1,9 @@
 {
-  "agent_id": "agent_01XtE3W37NR3jjDRSbTFc8eh",
+  "agent_id": "agent_01J3vazzmrLfSpRbrYj3b3uM",
   "agent_version": 1,
-  "environment_id": "env_01H8NkXMX3wsZCXx1hM9w1Hn",
-  "session_id": "sesn_01BJpD2Djugb5FNJHtJMVmyV",
-  "created_at": "2026-06-01T14:26:26.7002349+09:00"
+  "environment_id": "env_019DrSK141cnvJFmH3Q7fbwq",
+  "session_id": "sesn_01EXvuN477dRFj2Muen1wfZq",
+  "vault_id": "vlt_011CbgUS8UCb9xWoJNqw8Yvw",
+  "mcp_server_url": "https://schedule-gateway.vercel.app/api/mcp/mcp",
+  "created_at": "2026-06-03T23:20:32.5891977+09:00"
 }

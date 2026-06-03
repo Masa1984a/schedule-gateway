@@ -5,10 +5,12 @@ import Anthropic from "@anthropic-ai/sdk";
  * - Agent / Environment は既存のものを「呼ぶだけ」（作り直さない）。
  * - beta ヘッダ `managed-agents-2026-04-01` は SDK が自動付与する。
  *
- * MCP 対応:
- *   MCP_SERVER_URL が設定されている場合、セッション作成時に mcp_servers を渡す。
- *   GATEWAY_TOKEN を MCPサーバの認証トークンとして兼用する。
- *   MCP_SERVER_URL が未設定の場合は旧 bootstrap 方式にフォールバックする（ロールバック用）。
+ * MCP 対応（公式仕様）:
+ *   - Agent 側に mcp_servers（type/name/url）と mcp_toolset が宣言されている前提。
+ *     （managed-agent/setup-agent.ps1 で構成）
+ *   - 認証トークンは Vault に static_bearer として登録済み。
+ *   - セッション作成時は VAULT_ID を vault_ids として渡すだけ（mcp_servers は Session 不可）。
+ *   - VAULT_ID が未設定の場合は旧 bootstrap 方式にフォールバックする（ロールバック用）。
  */
 
 let _client: Anthropic | null = null;
@@ -41,21 +43,13 @@ export async function createSession(): Promise<string> {
     title: "schedule-gateway session",
   };
 
-  // MCP_SERVER_URL が設定されていれば予定DBのMCPサーバを接続する
-  const mcpUrl = process.env.MCP_SERVER_URL;
-  const mcpToken = process.env.GATEWAY_TOKEN;
-  if (mcpUrl && mcpToken) {
-    params.mcp_servers = [
-      {
-        type: "url",
-        url: mcpUrl,
-        name: "schedule-db",
-        authorization_token: mcpToken,
-      },
-    ];
+  // VAULT_ID が設定されていれば、予定DBのMCPサーバ認証用 Vault を参照する。
+  // （Agent 側に mcp_servers が宣言されており、Vault が static_bearer トークンを供給する）
+  const vaultId = process.env.VAULT_ID;
+  if (vaultId) {
+    params.vault_ids = [vaultId];
   }
 
-  // SDK の型定義が mcp_servers に追いついていないため as any でキャスト
   const session = await (client.beta.sessions.create as (p: unknown) => Promise<{ id: string }>)(params);
   return session.id;
 }

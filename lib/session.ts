@@ -2,11 +2,12 @@ import { neon } from "@neondatabase/serverless";
 import { createSession, bootstrapSession, getSessionStatus } from "./anthropic";
 
 /**
- * MCP_SERVER_URL が設定されていれば MCP 方式（bootstrap 不要）。
+ * VAULT_ID が設定されていれば MCP 方式（bootstrap 不要）。
+ * セッション作成時に vault_ids を渡し、Agent 側の mcp_servers が予定DBへアクセスする。
  * 未設定の場合は旧 bootstrap 方式にフォールバックする（ロールバック時に利用）。
  */
 function isMcpEnabled(): boolean {
-  return !!process.env.MCP_SERVER_URL;
+  return !!process.env.VAULT_ID;
 }
 
 /**

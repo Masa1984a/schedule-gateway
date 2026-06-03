@@ -75,14 +75,32 @@ DB アクセスは MCP ツール（schedule-db サーバ）経由で行います
 - 削除前は必ずユーザーの最終確認を取る。
 "@
 
+# MCP 設定（公式仕様）:
+#  - Agent 作成時に mcp_servers（type/name/url のみ・認証なし）と
+#    tools の mcp_toolset を宣言する。
+#  - 認証トークンは Vault に static_bearer として登録する。
+#  - Session 作成時に vault_ids でその Vault を参照する（mcp_servers は Session 不可）。
+$mcpUrl   = $env:MCP_SERVER_URL
+$mcpToken = $env:GATEWAY_TOKEN
+$mcpName  = 'schedule-db'
+$useMcp   = [bool]($mcpUrl -and $mcpToken)
+if (-not $useMcp) {
+  throw "MCP_SERVER_URL と GATEWAY_TOKEN を環境変数に設定してから実行してください（MCP 方式で Agent を構成します）。"
+}
+
 # --- 1. Agent ---
 Write-Host "Agent を作成中..."
+$tools = @(
+  @{ type = 'agent_toolset_20260401' },
+  @{ type = 'mcp_toolset'; mcp_server_name = $mcpName }
+)
 $agentBody = @{
-  name   = $AgentName
-  model  = $Model
-  system = $system
-  tools  = @(@{ type = 'agent_toolset_20260401' })
-  skills = $skills
+  name        = $AgentName
+  model       = $Model
+  system      = $system
+  tools       = $tools
+  skills      = $skills
+  mcp_servers = @(@{ type = 'url'; name = $mcpName; url = $mcpUrl })
 } | ConvertTo-Json -Depth 10
 $agent = Invoke-RestMethod -Method Post -Uri 'https://api.anthropic.com/v1/agents' -Headers $headers -Body $agentBody
 Write-Host "  Agent ID: $($agent.id) (v$($agent.version))"
@@ -96,32 +114,49 @@ $envBody = @{
 $environment = Invoke-RestMethod -Method Post -Uri 'https://api.anthropic.com/v1/environments' -Headers $headers -Body $envBody
 Write-Host "  Environment ID: $($environment.id)"
 
-# --- 3. Session ---
-Write-Host "Session を作成中..."
+# --- 3. Vault + static_bearer クレデンシャル ---
+# VAULT_ID が既にあれば再利用、無ければ新規作成。
+# クレデンシャルは mcp_server_url が Agent の mcp_servers.url と完全一致する必要がある。
+$vaultId = $env:VAULT_ID
+if ($vaultId) {
+  Write-Host "既存 Vault を使用: $vaultId"
+} else {
+  Write-Host "Vault を作成中..."
+  $vaultBody = @{ display_name = 'schedule-gateway' } | ConvertTo-Json
+  $vault = Invoke-RestMethod -Method Post -Uri 'https://api.anthropic.com/v1/vaults' -Headers $headers -Body $vaultBody
+  $vaultId = $vault.id
+  Write-Host "  Vault ID: $vaultId"
+}
 
-$sessData = [ordered]@{
+Write-Host "static_bearer クレデンシャルを登録中..."
+$credBody = @{
+  display_name = 'schedule-db gateway token'
+  auth = @{
+    type           = 'static_bearer'
+    mcp_server_url = $mcpUrl
+    token          = $mcpToken
+  }
+} | ConvertTo-Json -Depth 10
+try {
+  $cred = Invoke-RestMethod -Method Post -Uri "https://api.anthropic.com/v1/vaults/$vaultId/credentials" -Headers $headers -Body $credBody
+  Write-Host "  Credential ID: $($cred.id)"
+} catch {
+  # 409 = 同じ mcp_server_url のクレデンシャルが既に存在（再実行時）
+  if ($_.Exception.Response.StatusCode.value__ -eq 409) {
+    Write-Host "  既存クレデンシャルあり（同一 mcp_server_url）。トークンを更新したい場合は archive してから再作成してください。"
+  } else {
+    throw
+  }
+}
+
+# --- 4. Session（vault_ids で Vault を参照） ---
+Write-Host "Session を作成中..."
+$sessBody = @{
   agent          = $agent.id
   environment_id = $environment.id
   title          = 'Schedule management session'
-}
-
-# MCP_SERVER_URL が設定されていれば mcp_servers を追加
-$mcpUrl   = $env:MCP_SERVER_URL
-$mcpToken = $env:GATEWAY_TOKEN
-if ($mcpUrl -and $mcpToken) {
-  Write-Host "  MCP サーバを設定: $mcpUrl"
-  $sessData.mcp_servers = @(@{
-    type                = 'url'
-    url                 = $mcpUrl
-    name                = 'schedule-db'
-    authorization_token = $mcpToken
-  })
-} else {
-  Write-Host "  ⚠ MCP_SERVER_URL または GATEWAY_TOKEN が未設定のため mcp_servers なしで作成します。"
-  Write-Host "    Vercel にデプロイ後、これらの環境変数を設定して再実行してください。"
-}
-
-$sessBody = $sessData | ConvertTo-Json -Depth 10
+  vault_ids      = @($vaultId)
+} | ConvertTo-Json -Depth 10
 $session = Invoke-RestMethod -Method Post -Uri 'https://api.anthropic.com/v1/sessions' -Headers $headers -Body $sessBody
 Write-Host "  Session ID: $($session.id)"
 
@@ -133,6 +168,8 @@ $out = [ordered]@{
   agent_version  = $agent.version
   environment_id = $environment.id
   session_id     = $session.id
+  vault_id       = $vaultId
+  mcp_server_url = $mcpUrl
   created_at     = (Get-Date).ToString('o')
 }
 $outPath = Join-Path $PSScriptRoot 'agent-ids.json'
@@ -142,9 +179,11 @@ Write-Host ""
 Write-Host "完了。ID は agent-ids.json に保存しました。"
 Write-Host ""
 Write-Host "=== 次のステップ ==="
-Write-Host "1. Vercel にデプロイして MCP_SERVER_URL を確認する"
-Write-Host "   例: https://<your-app>.vercel.app/api/mcp"
-Write-Host "2. Vercel の環境変数に MCP_SERVER_URL を設定する"
+Write-Host "Vercel と .env.local に以下を設定してください:"
+Write-Host "  AGENT_ID=$($agent.id)"
+Write-Host "  ENVIRONMENT_ID=$($environment.id)"
+Write-Host "  VAULT_ID=$vaultId"
+Write-Host "  MCP_SERVER_URL=$mcpUrl"
 Write-Host "3. .env.local の AGENT_ID / ENVIRONMENT_ID を更新する:"
 Write-Host "   AGENT_ID=$($agent.id)"
 Write-Host "   ENVIRONMENT_ID=$($environment.id)"
