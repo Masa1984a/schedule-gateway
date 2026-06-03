@@ -90,9 +90,15 @@ if (-not $useMcp) {
 
 # --- 1. Agent ---
 Write-Host "Agent を作成中..."
+# mcp_toolset は既定が always_ask（承認待ち）。bootstrap時代の bash 同様に
+# 自動実行させるため always_allow を明示する（破壊的操作の確認は各スキルが会話で取る）。
 $tools = @(
   @{ type = 'agent_toolset_20260401' },
-  @{ type = 'mcp_toolset'; mcp_server_name = $mcpName }
+  @{
+    type            = 'mcp_toolset'
+    mcp_server_name = $mcpName
+    default_config  = @{ permission_policy = @{ type = 'always_allow' } }
+  }
 )
 $agentBody = @{
   name        = $AgentName
