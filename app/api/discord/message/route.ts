@@ -1,5 +1,5 @@
 import { askAgentText } from "@/lib/gateway-chat";
-import { buildDiscordThreadKey } from "@/lib/discord";
+import { buildDiscordThreadKey, formatDiscordContent } from "@/lib/discord";
 import { isAuthorized, unauthorized } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
   try {
     const userKey = buildDiscordThreadKey(guildId || undefined, channelId);
     const result = await askAgentText(userKey, message);
-    return json({ text: result.text, session_id: result.sessionId });
+    return json({ text: formatDiscordContent(result.text), session_id: result.sessionId });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
