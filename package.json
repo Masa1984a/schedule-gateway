@@ -8,8 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "discord:register": "node scripts/register-discord-command.mjs",
-    "discord:bot": "node scripts/discord-bot.mjs"
+    "discord:register": "node --env-file-if-exists=.env.local scripts/register-discord-command.mjs",
+    "discord:bot": "node --env-file-if-exists=.env.local scripts/discord-bot.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
