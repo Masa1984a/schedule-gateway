@@ -1,5 +1,4 @@
-import { getOrCreateSession } from "@/lib/session";
-import { streamSession, sendMessage } from "@/lib/anthropic";
+import { askAgentText, streamAgentEvents } from "@/lib/gateway-chat";
 import { isAuthorized, unauthorized } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -32,27 +31,20 @@ export async function POST(req: Request) {
 
   const sync = new URL(req.url).searchParams.get("mode") === "sync";
 
-  let sessionId: string;
-  try {
-    sessionId = await getOrCreateSession(USER_KEY);
-  } catch (err) {
-    return json({ error: errMsg(err) }, 500);
-  }
-
   if (sync) {
     try {
-      const text = await collectFinalText(sessionId, message);
-      return json({ text, session_id: sessionId });
+      const result = await askAgentText(USER_KEY, message);
+      return json({ text: result.text, session_id: result.sessionId });
     } catch (err) {
       return json({ error: errMsg(err) }, 500);
     }
   }
 
-  return sseResponse(sessionId, message);
+  return sseResponse(USER_KEY, message);
 }
 
 /** SSE ストリームで agent の出力を中継する。 */
-function sseResponse(sessionId: string, message: string): Response {
+function sseResponse(userKey: string, message: string): Response {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -64,31 +56,20 @@ function sseResponse(sessionId: string, message: string): Response {
       };
 
       try {
-        send("session", { session_id: sessionId });
-
-        const events = await streamSession(sessionId); // stream-first
-        await sendMessage(sessionId, message);
-
-        for await (const ev of events) {
+        for await (const ev of streamAgentEvents(userKey, message)) {
           switch (ev.type) {
-            case "agent.message":
-              for (const block of ev.content ?? []) {
-                if (block.type === "text" && block.text) {
-                  send("message", { text: block.text });
-                }
-              }
+            case "session":
+              send("session", { session_id: ev.sessionId });
               break;
-            case "agent.tool_use":
+            case "message":
+              send("message", { text: ev.text });
+              break;
+            case "tool":
               // 進捗フィードバック（「○○を実行中…」表示用）
-              send("tool", { name: ev.tool_name ?? ev.name ?? "tool" });
+              send("tool", { name: ev.name });
               break;
-            case "session.status_terminated":
-              send("done", { reason: "terminated" });
-              controller.close();
-              return;
-            case "session.status_idle":
-              if (ev.stop_reason?.type === "requires_action") continue;
-              send("done", { reason: ev.stop_reason?.type ?? "end_turn" });
+            case "done":
+              send("done", { reason: ev.reason });
               controller.close();
               return;
           }
@@ -110,27 +91,6 @@ function sseResponse(sessionId: string, message: string): Response {
       connection: "keep-alive",
     },
   });
-}
-
-/** idle まで読み切り、agent のテキスト出力を結合して返す（sync モード）。 */
-async function collectFinalText(sessionId: string, message: string): Promise<string> {
-  const events = await streamSession(sessionId); // stream-first
-  await sendMessage(sessionId, message);
-
-  let buf = "";
-  for await (const ev of events) {
-    if (ev.type === "agent.message") {
-      for (const block of ev.content ?? []) {
-        if (block.type === "text" && block.text) buf += block.text;
-      }
-    } else if (ev.type === "session.status_terminated") {
-      break;
-    } else if (ev.type === "session.status_idle") {
-      if (ev.stop_reason?.type === "requires_action") continue;
-      break;
-    }
-  }
-  return buf.trim();
 }
 
 function json(data: unknown, status = 200): Response {

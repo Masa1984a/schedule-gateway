@@ -214,3 +214,130 @@ npm run dev
 ## 7. 次アクション
 この要件でよければ、Step 1〜3 の **コード雛形を scaffold** する。
 （`lib/anthropic.ts` / `lib/session.ts` / `app/api/chat/route.ts` / 最小PWA UI / `.env.example`）
+
+---
+
+## 8. Discord フォーラムチャネル連携
+
+既存の **Web/PWA → `/api/chat` → gateway → Claude Managed Agent** の経路は残したまま、
+Discord の slash command から同じ gateway 経路を呼べるようにしている。
+
+```
+[Discord Forum Channel]
+   └─ Forum Post / Thread
+        │  /schedule message:<本文>
+        ▼
+[/api/discord/interactions @ schedule-gateway]
+        │  thread_id を user_key 化
+        ▼
+[gateway_sessions]
+        │  user_key=discord:guild:<guild_id>:thread:<thread_id>
+        ▼
+[Claude Managed Agents API]
+```
+
+### 8.1 セッション分離のルール
+
+- Web/PWA は従来どおり `user_key='me'` を使う。
+- Discord は **フォーラム投稿スレッドの `channel_id`** を使って
+  `user_key=discord:guild:<guild_id>:thread:<thread_id>` を作る。
+- 同じスレッドで `/schedule` を繰り返すと同じ `session_id` が再利用され、会話文脈が継続する。
+- 別スレッドでは `user_key` が変わるため、別の Managed Agent セッションが作られ、会話文脈は独立する。
+
+### 8.2 Discord 側の設定
+
+1. Discord Developer Portal で Application / Bot を作成する。
+2. Bot をサーバーに招待する。
+   - `applications.commands`
+   - フォーラムスレッドへ返信させるための基本的な送信権限
+3. Vercel / `.env.local` に以下を設定する。
+   - `DISCORD_APPLICATION_ID`
+   - `DISCORD_PUBLIC_KEY`
+   - `DISCORD_BOT_TOKEN`
+   - `DISCORD_FORUM_CHANNEL_ID`（フォーラム親チャネルID）
+   - 任意: `DISCORD_COMMAND_NAME`（既定 `schedule`）
+   - 任意: `DISCORD_GUILD_ID`（開発中は guild command 登録にすると反映が速い）
+4. Discord Developer Portal の **Interactions Endpoint URL** に以下を設定する。
+
+   ```
+   https://<your-app>.vercel.app/api/discord/interactions
+   ```
+
+5. slash command を登録する。
+
+   ```powershell
+   npm run discord:register
+   ```
+
+6. 対象フォーラムチャネルで投稿を作り、そのスレッド内で実行する。
+
+   ```
+   /schedule message:登録済みの予定を確認して
+   ```
+
+### 8.3 注意点
+
+- Discord Interactions は3秒以内に初回応答が必要なため、まず deferred response を返し、
+  Agent の処理完了後に original response を編集して返答を表示する。
+- Vercel の関数実行時間内で Agent 応答まで完了する必要があるため、`maxDuration = 300` を設定している。
+- §8 の serverless endpoint 単体は slash command 経由。ユーザーがスレッドに普通の文章を投稿しただけで Bot が読む方式は、
+  Discord Gateway の常時接続 Bot が必要になるため、§9 の常駐Botモードを併用する。
+
+---
+
+## 9. Discord 常駐Botモード（スレッドに普通に投稿して会話）
+
+§8 の slash command 方式に加えて、**フォーラムスレッドに普通に投稿すると Bot が返信する**
+自然な会話モードも用意している（`scripts/discord-bot.mjs`）。両方式は併用でき、
+セッションキー（`discord:guild:<guild_id>:thread:<thread_id>`）を共有するので、
+どちらの入口で送っても同じスレッドなら同じ Managed Agent セッションが継続する。
+
+```
+[Discord Forum Thread]   ← 普通のメッセージ投稿
+        │  Gateway WebSocket (MESSAGE_CREATE)
+        ▼
+[scripts/discord-bot.mjs]  ← 常駐プロセス（Node 22+ 組み込み WebSocket）
+        │  POST /api/discord/message  (Bearer GATEWAY_TOKEN)
+        ▼
+[schedule-gateway]  thread_id を user_key 化
+        ▼
+[gateway_sessions] → [Claude Managed Agents API]
+        │
+        ▼  返答を同じスレッドへ reply
+[Discord Forum Thread]
+```
+
+### 9.1 仕組み
+
+- 常駐 Bot が Discord Gateway に WebSocket 接続し、`MESSAGE_CREATE` を購読する。
+- 対象が「フォーラム親チャネル配下のスレッド」内の投稿のときだけ反応する
+  （`DISCORD_FORUM_CHANNEL_ID` 未設定なら全スレッド対象）。
+- 投稿本文を `/api/discord/message` に渡し、gateway → Managed Agent の応答を同じスレッドへ返信する。
+- セッション分離は §8.1 と同一。同じスレッド=継続 / 別スレッド=独立 / Web(`me`)とも独立。
+
+### 9.2 必要な設定
+
+1. Discord Developer Portal の Bot 設定で **MESSAGE CONTENT INTENT** を ON にする
+   （スレッド本文を読むために必須）。
+2. 環境変数を設定する（`.env.example` 参照）。
+   - `DISCORD_BOT_TOKEN`
+   - `GATEWAY_BASE_URL`（例: `https://<your-app>.vercel.app`）
+   - `GATEWAY_TOKEN`（Web と共通）
+   - 任意: `DISCORD_FORUM_CHANNEL_ID`（監視するフォーラム親チャネル）
+   - 任意: `DISCORD_REQUIRE_MENTION=1`（Bot メンション時のみ反応させたい場合）
+3. 常駐プロセスを起動する（Vercel ではなく、常時起動できる環境＝Railway/Render/VPS/自宅サーバ等）。
+
+   ```powershell
+   npm run discord:bot
+   ```
+
+### 9.3 slash command 方式（§8）との使い分け
+
+| | slash command (`/schedule`) | 常駐Bot（普通の投稿） |
+|---|---|---|
+| 実行環境 | Vercel serverless のみで完結 | 常時起動プロセスが別途必要 |
+| UX | 毎回 `/schedule message:` 入力 | スレッドに普通に書くだけ |
+| MESSAGE CONTENT INTENT | 不要 | 必須 |
+| セッションキー | 共通（同じスレッドなら継続） | 共通（同じスレッドなら継続） |
+
+どちらか一方だけでも、両方同時でも運用できる。
